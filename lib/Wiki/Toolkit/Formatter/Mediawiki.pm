@@ -10,11 +10,12 @@ Wiki::Toolkit::Formatter::Mediawiki - A Mediawiki-style formatter for
 
 =head1 VERSION
 
-Version 0.01
+Version 0.02
 
 =cut
 
-our $VERSION = '0.01';
+use vars qw{$VERSION};
+$VERSION = '0.02';
 
 =head1 SYNOPSIS
 
@@ -95,32 +96,7 @@ sub _init
     my ($self, %args) = @_;
 
     # Store the parameters or their defaults.
-    my %defs = (allowed_tags => [# HTML
-				 qw(b big blockquote br caption center cite
-				    code dd div dl dt em font h1 h2 h3 h4 h5 h6
-				    hr i li ol p pre rb rp rt ruby s small
-				    strike strong sub sup table td th tr tt u
-				    ul var),
-				 # MediaWiki Specific
-				 qw(nowiki),],
-		allowed_attrs => [qw(title align lang dir width height
-				     bgcolor),
-				  qw(clear), # BR
-				  qw(noshade), # HR
-				  qw(cite), # BLOCKQUOTE, Q
-				  qw(size face color), # FONT
-				  # For various lists, mostly deprecated but
-				  # safe
-				  qw(type start value compact),
-				  # Tables
-				  qw(summary width border frame rules
-				     cellspacing cellpadding valign char
-				     charoff colgroup col span abbr axis
-				     headers scope rowspan colspan),
-				  qw(id class name style), # For CSS
-				 ],
-		node_prefix => '',
-		store => undef);
+    my %defs = (store => undef);
 
     foreach my $k (keys %defs)
     {
@@ -143,61 +119,24 @@ language supplied into HTML.
 
 =cut
 
-# Turn the contents after a ; or : into a dictionary list.
-# Using : without ; just looks like an indent.
-sub _dl
-{
-    #my ($line, $indent, $lead) = @_;
-    my ($term, $def);
-
-    if ($_[2] eq ';')
-    {
-	if ($_[0] =~ /^(.*?)\s+:\s+(.*)$/)
-	{
-	    $term = $1;
-	    $def = $2;
-	}
-    }
-    else
-    {
-	*def = \$_[0];
-    }
-
-    my $retval;
-    $retval = "<dt>$term</dt>\n" if defined $term;
-    $retval .= "<dd>$def</dd>\n" if defined $def;
-}
-
-sub _make_wiki_link
-{
-}
-
-# Turn [[Wiki Link|Title]] or [URI Title] into links.
-sub _make_link
+# Turn [[Wiki Link|Title]], [URI Title], scheme:url, or StudlyCaps into links.
+sub _make_html_link
 {
     my ($tag, $opts, $tags) = @_;
 
     my $class = '';
     my ($href, $title);
-    if ($tag =~ /^\[([^|#]*)(?:(#)([^|]*))?(?:(\|)(.*))?\]$/)
+    if ($tag =~ /^\[\[([^|#]*)(?:(#)([^|]*))?(?:(\|)(.*))?\]\]$/)
     {
 	# Wiki link
-	print STDERR "_store = ", $tags->{_store}, "\n";
 	if ($1)
 	{
 	    $href = $opts->{prefix} . uri_escape $1 if $1;
 	    $class = " class='link_wanted'"
-		unless $tags->{_store}->node_exists ($1);
+		unless $tags->{_store} && $tags->{_store}->node_exists ($1);
 	}
 
-	if ($class)
-	{
-	    $href .= "?action=edit";
-	}
-	else
-	{
-	    $href .= $2 . uri_escape $3 if $2;
-	}
+	$href .= $2 . uri_escape $3 if $2;
 
 	if ($4)
 	{
@@ -220,10 +159,9 @@ sub _make_link
 	    $title = $1;
 	}
     }
-    else
+    elsif ($tag =~ /^\[(\S*)(?:(\s+)(.*))?\]$/)
     {
 	# URI
-	$tag =~ /^(\S*)(?:(\s+)(.*))?$/;
 	$href = $1;
 	if ($2)
 	{
@@ -235,71 +173,32 @@ sub _make_link
 	}
 	$href =~ s/'/%27/g;
     }
-
-    return "<a$class href='$href'>"
-	   . Text::MediawikiFormat::format_line ($title, $tags, $opts)
-	   . "</a>";
-}
-
-# Store a TOC line for later.
-#
-# ASSUMPTIONS
-#   $level >= 1
-sub _store_toc_line
-{
-    my ($toc, $level, $title, $name) = @_;
-
-    # TODO: Strip formatting from $title.
-
-    if (@$toc && $level > $toc->[-1]->{level})
-    {
-	# Nest a sublevel.
-	$toc->[-1]->{sublevel} = []
-	    unless exists $toc->[-1]->{sublevel};
-	_store_toc_line ($toc->[-1]->{sublevel}, $level, $title, $name);
-    }
     else
     {
-	push @$toc, {level => $level, title => $title, name => $name};
+	# Shouldn't be able to get here without either $opts->{absolute_links}
+	# or $opts->{implicit_links};
+	$tags->{_schema_regex} ||=
+	    Text::MediawikiFormat::_make_schema_regex @{$tags->{schemas}};
+	my $s = $tags->{_schema_regex};
+
+	if ($tag =~ /^($s:\S+)$/)
+	{
+	    # absolute link
+	    $href = $1;
+	    $title = $1;
+	}
+	else
+	{
+	    # StudlyCaps
+	    $href = $opts->{prefix} . uri_escape $tag;
+	    $class = " class='link_wanted'"
+		unless $tags->{_store} && $tags->{_store}->node_exists ($tag);
+	    $title = $tag;
+	}
     }
 
-    return $level;
+    return "<a$class href='$href'>$title</a>";
 }
-
-# Make header text, storing the line for the TOC.
-#
-# ASSUMPTIONS
-#   $tags->{_toc} has been initialized to an array ref.
-sub _make_header
-{
-    my $level = length $_[2];
-    my $n = uri_escape $_[3];
-
-    _store_toc_line ($_[-2]->{_toc}, $level, $_[3], $n);
-
-    return "<a name='$n'></a><h$level>",
-	   Text::MediawikiFormat::format_line ($_[3], @_[-2, -1]),
-	   "</h$level>\n";
-}
-
-#sub _format_redirect
-#{
-#    my ($self, $target) = @_;
-#
-#    my $href = _make_link ("[$target]", $tags, $opts);
-#
-#    if ($tags->{_redirect_image})
-#    {
-#	$img = "<img alt='#REDIRECT' src='" . $tags->{_redirect_image}
-#	       . " />";
-#    }
-#    else
-#    {
-#	$img = "#REDIRECT ";
-#    }
-#
-#    return "<span class='redirect_text'>$img$href</span>"
-#}
 
 # Return the text of a page, after recursively replacing any variables
 # and templates in the included page.
@@ -314,6 +213,27 @@ sub _magic_words
 {
 }
 
+sub _format_redirect
+{
+    my ($self, $target) = @_;
+
+#    my $href = _make_html_link ("[$target]", $tags, $opts);
+    my $href = $target;
+
+    my $img;
+#    if ($tags->{_redirect_image})
+#    {
+#	$img = "<img alt='#REDIRECT' src='" . $tags->{_redirect_image}
+#	. " />";
+#    }
+#    else
+    {
+	$img = "#REDIRECT ";
+    }
+
+    return "<span class='redirect_text'>$img$href</span>"
+}
+
 sub format
 {
     my ($self, $raw) = @_;
@@ -325,49 +245,19 @@ sub format
     return $self->_format_redirect ($1)
 	if $raw =~ /^#redirect\s+\[\[([^]]+)\]\]/si;
 
-    return wikiformat ($raw,
-		       {
-			indent         => qr/^(?:[:*#;]*)(?=[:*#;])/,
-			extended_link_delimiters =>
-					  qr/\[(\[[^][]*\]|[^][]*)\]/,
-			blocks         =>
-			{
-			 code          => qr/^ /,
-			 header        => qr/^(=+)\s*(.+)\s*\1$/,
-			 line          => qr/^-{4,}$/,
-			 ordered       => qr/^#\s*/,
-			 unordered     => qr/^\*\s*/,
-			 definition    => qr/^([;:])\s*/,
-			},
+    my %tags;
+    $tags{allowed_tags} = $self->{_allowed_tags}
+	if $self->{_allowed_attrs};
+    $tags{allowed_attrs} = $self->{_allowed_attrs}
+	if $self->{_allowed_attrs};
+    $tags{link} = \&_make_html_link;
+    $tags{_store} = $self->{_store};
 
-			indented       => {map {$_ => 1} qw(ordered unordered
-							    definition)},
-			nests          => {map {$_ => 1} qw(ordered unordered
-							    definition)},
-			blockorder     => [qw(code header line ordered
-					      unordered definition paragraph)],
+    my %opts;
+    $opts{prefix} = $self->{_node_prefix}
+	if $self->{_node_prefix};
 
-			link           => \&_make_link,
-			code           => ['<pre>', "</pre>\n", '', "\n"],
-			header         => ['', "\n", \&_make_header],
-			ordered        => ["<ol>\n", "</ol>\n", '<li>',
-					   "</li>\n"],
-			definition     => ["<dl>\n", "</dl>\n", \&_dl],
-			paragraph      => ["<p>", "</p>\n", '', "\n"],
-
-			allowed_tags   => $self->{_allowed_tags},
-			allowed_attrs  => $self->{_allowed_attrs},
-
-			_store         => $self->{_store},
-			_toc           => [],
-                       },
-		       {
-			extended       => 1,
-			implicit_links => 0,
-			prefix         => $self->{_node_prefix},
-			process_html   => 1,
-		       },
-		      );
+    return wikiformat ($raw, \%tags, \%opts);
 }
 
 =head2 find_internal_links
@@ -376,9 +266,12 @@ sub format
 
 Returns a list of all nodes that the supplied content links to.
 
+B<This is still broken.>
+
 =cut
 
-our @_links_found = ();
+use vars qw{@_links_found};
+@_links_found = ();
 sub find_internal_links {
     my ($self, $raw) = @_;
 
@@ -427,7 +320,7 @@ Derek R. Price, C<< <derek at ximbiot.com> >>
 
 Please report any bugs or feature requests to
 C<bug-cgi-wiki-formatter-mediawiki at rt.cpan.org>, or through the web interface at
-L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=CGI-Wiki-Formatter-Mediawiki>.
+L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Wiki-Toolkit-Formatter-Mediawiki>.
 I will be notified, and then you'll automatically be notified of progress on
 your bug as I make changes.
 
@@ -443,19 +336,19 @@ You can also look for information at:
 
 =item * AnnoCPAN: Annotated CPAN documentation
 
-L<http://annocpan.org/dist/CGI-Wiki-Formatter-Mediawiki>
+L<http://annocpan.org/dist/Wiki-Toolkit-Formatter-Mediawiki>
 
 =item * CPAN Ratings
 
-L<http://cpanratings.perl.org/d/CGI-Wiki-Formatter-Mediawiki>
+L<http://cpanratings.perl.org/d/Wiki-Toolkit-Formatter-Mediawiki>
 
 =item * RT: CPAN's request tracker
 
-L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=CGI-Wiki-Formatter-Mediawiki>
+L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=Wiki-Toolkit-Formatter-Mediawiki>
 
 =item * Search CPAN
 
-L<http://search.cpan.org/dist/CGI-Wiki-Formatter-Mediawiki>
+L<http://search.cpan.org/dist/Wiki-Toolkit-Formatter-Mediawiki>
 
 =back
 

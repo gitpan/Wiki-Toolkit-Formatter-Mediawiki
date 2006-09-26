@@ -7,7 +7,7 @@ WriteMakefile
           'PREREQ_PM' => {
                            'Carp' => '0',
                            'Test::More' => '0',
-                           'Text::MediawikiFormat' => '0',
+                           'Text::MediawikiFormat' => '0.02',
                            'URI::Escape' => '0'
                          },
           'INSTALLDIRS' => 'site',
