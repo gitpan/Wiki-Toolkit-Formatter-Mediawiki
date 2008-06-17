@@ -1,4 +1,13 @@
-Revision history for CGI-Wiki-Formatter-Mediawiki
+Revision history for Wiki-Toolkit-Formatter-Mediawiki
+
+0.03    June 17, 2008
+	- Escape UTF-8 characters in URIs.
+	- Add method for retrieving links in content, returns an array of links
+	  found.
+	- Add template support.
+	- Import new absolute link handling stuff from Text::Mediawiki 0.05.
+	- Link "RFC \d+".
+	- Prefer "our" to "use vars".
 
 0.02    September 26, 2006
 	Use Text::MediawikiFormat 0.02.

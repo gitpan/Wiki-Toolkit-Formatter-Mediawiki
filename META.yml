@@ -1,15 +1,11 @@
 ---
 name: Wiki-Toolkit-Formatter-Mediawiki
-version: !!perl/hash:Module::Build::Version
-  original: 0.02
-  version:
-    - 0
-    - 20
+version: 0.03
 author:
   - 'Derek R. Price <derek@ximbiot.com>'
 abstract: |-
   A Mediawiki-style formatter for
-                                        Wiki::Toolkit.
+  Wiki::Toolkit.
 license: perl
 resources:
   license: http://dev.perl.org/licenses/
@@ -22,8 +18,8 @@ build_requires:
 provides:
   Wiki::Toolkit::Formatter::Mediawiki:
     file: lib/Wiki/Toolkit/Formatter/Mediawiki.pm
-    version: 0.02
-generated_by: Module::Build version 0.2804
+    version: 0.03
+generated_by: Module::Build version 0.2808
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.2.html
   version: 1.2

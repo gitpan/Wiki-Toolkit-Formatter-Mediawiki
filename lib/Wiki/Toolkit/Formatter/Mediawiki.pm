@@ -1,21 +1,21 @@
 package Wiki::Toolkit::Formatter::Mediawiki;
 
+use Wiki::Toolkit::Formatter::Mediawiki::Link;
 use warnings;
 use strict;
 
 =head1 NAME
 
 Wiki::Toolkit::Formatter::Mediawiki - A Mediawiki-style formatter for
-                                      Wiki::Toolkit.
+Wiki::Toolkit.
 
 =head1 VERSION
 
-Version 0.02
+Version 0.03
 
 =cut
 
-use vars qw{$VERSION};
-$VERSION = '0.02';
+our $VERSION = '0.03';
 
 =head1 SYNOPSIS
 
@@ -30,9 +30,8 @@ used by Wikipedia and friends).
     my $store = Wiki::Toolkit::Store::Mediawiki->new ( ... );
     # See below for parameter details.
     my $formatter = Wiki::Toolkit::Formatter::Mediawiki->new (%config,
-                                                          store => $store);
-    my $wiki = Wiki::Toolkit->new (store     => $store,
-                               formatter => $formatter);
+							      store => $store);
+    my $wiki = Wiki::Toolkit->new (store => $store, formatter => $formatter);
 
 =cut
 
@@ -40,7 +39,7 @@ used by Wikipedia and friends).
 
 use Carp qw(croak);
 use Text::MediawikiFormat as => 'wikiformat';
-use URI::Escape;
+use URI::Escape qw(uri_escape_utf8);
 
 
 =head1 METHODS
@@ -96,7 +95,13 @@ sub _init
     my ($self, %args) = @_;
 
     # Store the parameters or their defaults.
-    my %defs = (store => undef);
+    my %defs = (store => undef,
+	        node_prefix => '',
+		extended_link_delimiters => qr!\[(?:\[[^][]*\]|[^][]*)\]
+					       |\{\{\{[^{}]*\}\}\}
+					       |\{\{[^{}]*\}\}
+					       |\bRFC\s\d+!x
+	       );
 
     foreach my $k (keys %defs)
     {
@@ -119,24 +124,69 @@ language supplied into HTML.
 
 =cut
 
+our $uric = $URI::uric;
+our $uricCheat = $uric;
+
+# We need to avoid picking up 'HTTP::Request::Common' so we have a
+# subset of uric without a colon.
+$uricCheat =~ tr/://d;
+
+# Identifying characters often accidentally picked up trailing a URI.
+our $uriCruft = q/]),.!'";}/;
+
+
+
+# Return the text of a page, after recursively replacing any variables
+# and templates in the included page.
+sub _include
+{
+    my ($template_name, $opts, $tags) = @_;
+    $tags->{_template_stack} ||= [];
+
+    return "Template recursion detected: "
+	   . join (" -&gt; ", @{$tags->{_template_stack}})
+	   . " -&gt; $template_name (repeat)."
+	if grep /^\Q$template_name\E$/, @{$tags->{_template_stack}};
+
+    #Recurse if no loop detected.
+    push @{$tags->{_template_stack}}, $template_name;
+
+    my $text = $tags->{_store}->retrieve_node ("Template:$template_name");
+    return "{{$template_name}}" unless defined $text;
+
+    $text = wikiformat ($text, $tags, $opts);
+    pop @{$tags->{_template_stack}};
+    return $text;
+}
+
+
+
 # Turn [[Wiki Link|Title]], [URI Title], scheme:url, or StudlyCaps into links.
 sub _make_html_link
 {
     my ($tag, $opts, $tags) = @_;
 
-    my $class = '';
+    my ($class, $trailing) = ('', '');
     my ($href, $title);
     if ($tag =~ /^\[\[([^|#]*)(?:(#)([^|]*))?(?:(\|)(.*))?\]\]$/)
     {
 	# Wiki link
 	if ($1)
 	{
-	    $href = $opts->{prefix} . uri_escape $1 if $1;
-	    $class = " class='link_wanted'"
-		unless $tags->{_store} && $tags->{_store}->node_exists ($1);
+	    if ($tags->{_store}
+		&& ($href = $tags->{_store}->get_interwiki_url ($1)))
+	    {
+		$class = " class='external'";
+	    }
+	    else
+	    {
+		$href = $opts->{prefix} . uri_escape_utf8 $1 if $1;
+		$class = " class='link_wanted'"
+		    unless !$tags->{_store}
+			   || $tags->{_store}->node_exists ($1);
+	    }
 	}
-
-	$href .= $2 . uri_escape $3 if $2;
+	$href .= $2 . uri_escape_utf8 $3 if $2;
 
 	if ($4)
 	{
@@ -173,51 +223,67 @@ sub _make_html_link
 	}
 	$href =~ s/'/%27/g;
     }
+    elsif ($tag =~ qr/^RFC\s(\d+)$/)
+    {
+	# Could process ISBN too.
+	return $tag
+	    unless $tags->{_store}
+		   && ($href = $tags->{_store}->get_interwiki_url ("RFC:$1"));
+
+	$class = " class='external'";
+	$title = $tag;
+    }
+    elsif ($tag =~ /^\{\{(.*)\}\}$/)
+    {
+	# Template
+
+	# Ignore it if it doesn't exist.
+	return $tag unless $tags->{_store}->node_exists ("Template:$1");
+
+	return _include $1, $opts, $tags;
+    }
     else
     {
 	# Shouldn't be able to get here without either $opts->{absolute_links}
 	# or $opts->{implicit_links};
-	$tags->{_schema_regex} ||=
-	    Text::MediawikiFormat::_make_schema_regex @{$tags->{schemas}};
+	$tags->{_schema_regex}
+	||= Text::MediawikiFormat::_make_schema_regex @{$tags->{schemas}};
 	my $s = $tags->{_schema_regex};
 
-	if ($tag =~ /^($s:\S+)$/)
+	if ($tag =~ /^(?:&lt;)?$s:[$uricCheat][$uric]*(?:&gt;)?$/)
 	{
 	    # absolute link
-	    $href = $1;
-	    $title = $1;
+	    $href = $&;
+	    $trailing = $& if $href =~ s/[$uriCruft]$//;
+	    $href =~ s/^(?:&lt;)?(.+?)(?:&gt;)?$/$1/;
+	    $title = $href;
 	}
 	else
 	{
 	    # StudlyCaps
-	    $href = $opts->{prefix} . uri_escape $tag;
+	    $href = $opts->{prefix} . uri_escape_utf8 $tag;
 	    $class = " class='link_wanted'"
 		unless $tags->{_store} && $tags->{_store}->node_exists ($tag);
 	    $title = $tag;
 	}
     }
 
-    return "<a$class href='$href'>$title</a>";
+    return "<a$class href='$href'>$title</a>$trailing";
 }
 
-# Return the text of a page, after recursively replacing any variables
-# and templates in the included page.
-#
-# Needs some sort of loop detection or, at least, a maximum number of includes
-# to avoid DoS.
-sub _include
-{
-}
+
 
 sub _magic_words
 {
 }
 
+
+
 sub _format_redirect
 {
     my ($self, $target) = @_;
 
-#    my $href = _make_html_link ("[$target]", $tags, $opts);
+#    my $href = _make_html_link ("[[$target]]", $tags, $opts);
     my $href = $target;
 
     my $img;
@@ -234,6 +300,8 @@ sub _format_redirect
     return "<span class='redirect_text'>$img$href</span>"
 }
 
+
+
 sub format
 {
     my ($self, $raw) = @_;
@@ -245,14 +313,17 @@ sub format
     return $self->_format_redirect ($1)
 	if $raw =~ /^#redirect\s+\[\[([^]]+)\]\]/si;
 
+    # Set up the %tags array.
     my %tags;
     $tags{allowed_tags} = $self->{_allowed_tags}
 	if $self->{_allowed_attrs};
-    $tags{allowed_attrs} = $self->{_allowed_attrs}
-	if $self->{_allowed_attrs};
+
+    # These always get set up.
     $tags{link} = \&_make_html_link;
+    $tags{extended_link_delimiters} = $self->{_extended_link_delimiters};
     $tags{_store} = $self->{_store};
 
+    # Set up the %opts array.
     my %opts;
     $opts{prefix} = $self->{_node_prefix}
 	if $self->{_node_prefix};
@@ -260,40 +331,106 @@ sub format
     return wikiformat ($raw, \%tags, \%opts);
 }
 
+
+# Turn [[Wiki Link|Title]], [URI Title], scheme:url, into an array of links.
+sub _stash_html_link
+{
+    my ($tag, $opts, $tags) = @_;
+    my $type;
+    my $name;
+
+    if ($tag =~ /^\[\[([^|#]*)(?:(#)([^|]*))?(?:(\|)(.*))?\]\]$/)
+    {
+	# Wiki link
+	if ($1)
+	{
+	    unless ($tags->{_store}
+		&& ($tags->{_store}->get_interwiki_url ($1)))
+	    {
+		$name = $1;
+		$type = 'page';
+	    }
+	}
+    }
+    elsif ($tag =~ /^\[(\S*)(?:(\s+)(.*))?\]$/)
+    {
+	# URI
+	$name = $1;
+	$type = 'external';
+    }
+    elsif ($tag =~ qr/^RFC\s(\d+)$/)
+    {
+	# Could process ISBN too.
+	$name = "RFC:$1";
+	$type = 'rfc';
+    }
+    elsif ($tag =~ /^\{\{\{(.*)\}\}\}$/){#no triples please.
+    }
+    elsif ($tag =~ /^\{\{(.*)\}\}$/)
+    {
+	# Template
+        $name = "Template:$1";
+	$type = 'template';
+    }
+    else
+    {
+	# Shouldn't be able to get here without either $opts->{absolute_links}
+	# or $opts->{implicit_links};
+	$tags->{_schema_regex}
+	||= Text::MediawikiFormat::_make_schema_regex @{$tags->{schemas}};
+	my $s = $tags->{_schema_regex};
+
+	if ($tag =~ /^(?:&lt;)?$s:[$uricCheat][$uric]*(?:&gt;)?$/)
+	{
+	    # absolute link
+	    $name = $&;
+	    $name =~ s/^(?:&lt;)?(.+?)(?:&gt;)?$/$1/;
+	    $type = 'external';
+	}
+	else
+	{
+	    # StudlyCaps
+	    $name = $tag;
+	    $type = 'page';
+	}
+    }
+    my $link = new Wiki::Toolkit::Formatter::Mediawiki::Link $name, $type;
+    push @{$tags->{_found_links}}, $link
+	unless (!$link || grep /^\Q$link\E$/, @{$tags->{_found_links}});
+}
+
+
 =head2 find_internal_links
 
   my @links_to = $formatter->find_internal_links ($content);
 
 Returns a list of all nodes that the supplied content links to.
 
-B<This is still broken.>
-
 =cut
 
-use vars qw{@_links_found};
-@_links_found = ();
 sub find_internal_links {
     my ($self, $raw) = @_;
+    my @found_links = ();
 
-    my $foo = wikiformat ($raw,
-	{ link =>
-	  sub
-	  {
-	      my ($link, $opts) = @_;
-	      $opts ||= {};
-	      my $title;
-	      ($link, $title) = split(/\|/, $link, 2) if $opts->{extended};
-	      push @Wiki::Toolkit::Formatter::Default::_links_found, $link;
-	      return ""; # don't care about output
-	  }
-	},
-	{ extended       => $self->{_extended_links},
-	  prefix         => $self->{_node_prefix},
-	  implicit_links => $self->{_implicit_links} } );
+    # Set up the %tags array.
+    my %tags;
+    $tags{allowed_tags} = $self->{_allowed_tags}
+	if $self->{_allowed_attrs};
 
-    my @links = @_links_found;
-    @_links_found = ();
-    return @links;
+    # These always get set up.
+    $tags{link} = \&_stash_html_link;
+    $tags{extended_link_delimiters} = $self->{_extended_link_delimiters};
+    $tags{_store} = $self->{_store};
+    $tags{_found_links} = \@found_links;
+
+    # Set up the %opts array.
+    my %opts;
+    $opts{prefix} = $self->{_node_prefix}
+	if $self->{_node_prefix};
+
+    wikiformat ($raw, \%tags, \%opts);
+
+    return @found_links;
 }
 
 
