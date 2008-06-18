@@ -1,6 +1,6 @@
 ---
 name: Wiki-Toolkit-Formatter-Mediawiki
-version: 0.03
+version: 0.04
 author:
   - 'Derek R. Price <derek@ximbiot.com>'
 abstract: |-
@@ -18,7 +18,10 @@ build_requires:
 provides:
   Wiki::Toolkit::Formatter::Mediawiki:
     file: lib/Wiki/Toolkit/Formatter/Mediawiki.pm
-    version: 0.03
+    version: 0.04
+  Wiki::Toolkit::Formatter::Mediawiki::Link:
+    file: lib/Wiki/Toolkit/Formatter/Mediawiki/Link.pm
+    version: 0
 generated_by: Module::Build version 0.2808
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.2.html

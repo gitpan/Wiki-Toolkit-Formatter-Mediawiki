@@ -1,5 +1,7 @@
 Revision history for Wiki-Toolkit-Formatter-Mediawiki
 
+0.04    June 18, 2008
+
 0.03    June 17, 2008
 	- Escape UTF-8 characters in URIs.
 	- Add method for retrieving links in content, returns an array of links

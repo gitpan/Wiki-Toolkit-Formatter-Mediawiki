@@ -1,8 +1,7 @@
 package Wiki::Toolkit::Formatter::Mediawiki;
 
-use Wiki::Toolkit::Formatter::Mediawiki::Link;
-use warnings;
 use strict;
+use warnings;
 
 =head1 NAME
 
@@ -11,11 +10,11 @@ Wiki::Toolkit.
 
 =head1 VERSION
 
-Version 0.03
+Version 0.04
 
 =cut
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 =head1 SYNOPSIS
 
@@ -40,6 +39,7 @@ used by Wikipedia and friends).
 use Carp qw(croak);
 use Text::MediawikiFormat as => 'wikiformat';
 use URI::Escape qw(uri_escape_utf8);
+use Wiki::Toolkit::Formatter::Mediawiki::Link;
 
 
 =head1 METHODS
